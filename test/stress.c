@@ -60,7 +60,7 @@ int main()
     }
 
     if(!redis_port) {
-        redis_port = "6397";
+        redis_port = "6379";
     }
 
     redisContext* redis = redisConnect(redis_host, atoi(redis_port));
