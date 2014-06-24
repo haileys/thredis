@@ -1,0 +1,4 @@
+language: c
+services:
+  - redis-server
+script: make test
