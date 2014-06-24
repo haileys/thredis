@@ -1,4 +1,9 @@
-CFLAGS = -Wall -Werror -pedantic -Wextra -O3 -I vendor/hiredis
+CFLAGS = -Wall -Werror -pedantic -Wextra -O3 -I vendor/hiredis -std=c99
+
+ifeq ($(shell uname -s),Linux)
+	CFLAGS += -pthread
+	LDFLAGS += -lrt
+endif
 
 TEST_CFLAGS = -iquote .
 
@@ -16,7 +21,7 @@ clean:
 thredis.o: vendor/hiredis/hiredis.h
 
 test/stress: test/stress.c thredis.o vendor/hiredis/libhiredis.a
-	$(CC) -o $@ $(CFLAGS) $(TEST_CFLAGS) $^
+	$(CC) -o $@ $(LDFLAGS) $(CFLAGS) $(TEST_CFLAGS) $^
 
 vendor/hiredis/%: vendor/hiredis/Makefile
 	$(MAKE) -C vendor/hiredis $(subst vendor/hiredis/,,$@)
