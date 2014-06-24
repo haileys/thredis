@@ -44,6 +44,18 @@ push_waiter(thredis_t* thredis, struct redis_wait* waiter)
     thredis->wait_tail = &waiter->next;
 }
 
+static void
+deliver_reply(thredis_t* thredis, redisReply* reply)
+{
+    struct redis_wait* wait = pop_waiter(thredis);
+
+    wait->reply = reply;
+
+    pthread_mutex_lock(&wait->mutex);
+    pthread_cond_signal(&wait->done);
+    pthread_mutex_unlock(&wait->mutex);
+}
+
 static void*
 reader_thread_main(void* ctx)
 {
@@ -59,40 +71,47 @@ reader_thread_main(void* ctx)
         }
 
         if(pfd.revents & POLLERR) {
-            // TODO - pass error to caller
-            // log_message("redis connection died");
-            exit(EXIT_FAILURE);
+            // TODO - how do we tell the user about this error?
+            pthread_mutex_lock(&thredis->mutex);
+            while(thredis->wait_head) {
+                deliver_reply(thredis, NULL);
+            }
+            thredis->redis = NULL;
+            pthread_mutex_unlock(&thredis->mutex);
+            return NULL;
         }
 
         if(pfd.revents & POLLIN) {
             pthread_mutex_lock(&thredis->mutex);
 
             if(redisBufferRead(thredis->redis) != REDIS_OK) {
-                // TODO - pass error to caller
-                // log_message("redis_reader_thread_main: redisBufferRead failed: errstr = '%s'", redis->errstr);
-                exit(EXIT_FAILURE);
+                // TODO - how do we tell the user about this error?
+                while(thredis->wait_head) {
+                    deliver_reply(thredis, NULL);
+                }
+                thredis->redis = NULL;
+                pthread_mutex_unlock(&thredis->mutex);
+                return NULL;
             }
 
             while(1) {
                 redisReply* reply = NULL;
 
                 if(redisGetReplyFromReader(thredis->redis, (void**)&reply) != REDIS_OK) {
-                    // TODO - pass error to caller
-                    // log_message("redis_reader_thread_main: redisGetReplyFromReader failed: errstr = '%s'", redis->errstr);
-                    exit(EXIT_FAILURE);
+                    // TODO - how do we tell the user about this error?
+                    while(thredis->wait_head) {
+                        deliver_reply(thredis, NULL);
+                    }
+                    thredis->redis = NULL;
+                    pthread_mutex_unlock(&thredis->mutex);
+                    return NULL;
                 }
 
                 if(reply == NULL) {
                     break;
                 }
 
-                struct redis_wait* wait = pop_waiter(thredis);
-
-                wait->reply = reply;
-
-                pthread_mutex_lock(&wait->mutex);
-                pthread_cond_signal(&wait->done);
-                pthread_mutex_unlock(&wait->mutex);
+                deliver_reply(thredis, reply);
             }
 
             pthread_mutex_unlock(&thredis->mutex);
@@ -145,8 +164,12 @@ thredis_new(redisContext* redis)
 void
 thredis_close(thredis_t* thredis)
 {
-    // TODO
-    (void)thredis;
+    pthread_mutex_lock(&thredis->mutex);
+    pthread_cancel(thredis->reader_thread);
+    pthread_join(thredis->reader_thread, NULL);
+    pthread_mutex_unlock(&thredis->mutex);
+    pthread_mutex_destroy(&thredis->mutex);
+    free(thredis);
 }
 
 redisReply*
@@ -156,17 +179,21 @@ thredis_command(thredis_t* thredis, const char* format, ...)
     va_start(va, format);
     pthread_mutex_lock(&thredis->mutex);
 
-    if(redisvAppendCommand(thredis->redis, format, va) != REDIS_OK) {
-        // TODO - return error to caller
-        // log_message("redis_command: redisvAppendCommand failed: errstr = '%s'", redis->errstr);
+    if(!thredis->redis) {
         pthread_mutex_unlock(&thredis->mutex);
+        va_end(va);
+        return NULL;
+    }
+
+    if(redisvAppendCommand(thredis->redis, format, va) != REDIS_OK) {
+        pthread_mutex_unlock(&thredis->mutex);
+        va_end(va);
         return NULL;
     }
 
     if(flush_writes(thredis->redis) != REDIS_OK) {
-        // TODO - return error to caller
-        // log_message("redis_command: flush_writes failed: errstr = '%s'", redis->errstr);
         pthread_mutex_unlock(&thredis->mutex);
+        va_end(va);
         return NULL;
     }
 

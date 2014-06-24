@@ -89,5 +89,8 @@ int main()
         }
     }
 
+    thredis_close(thredis);
+    redisFree(redis);
+
     printf("\n");
 }
