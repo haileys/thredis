@@ -24,7 +24,7 @@ thread_main(void* ctx_)
 
     for(int i = 0; i < 10000; i++) {
         char str[16];
-        sprintf(str, "%d", i);
+        sprintf(str, "%d", i * THREAD_COUNT + number);
 
         redisReply* reply = thredis_command(thredis, "ECHO %s", str);
 
